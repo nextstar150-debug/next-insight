@@ -29,9 +29,17 @@
 ```bash
 export TELEGRAM_BOT_TOKEN="BotFather에서_재발급받은_토큰"
 export TELEGRAM_CHAT_ID="8791606761"
+export ANTHROPIC_API_KEY="Anthropic_API_Key"
 ```
 
 ⚠️ 기존 봇 토큰이 대화에 노출되었으므로 반드시 BotFather에서 재발급 후 설정할 것.
+
+## 환경변수 (선택 설정)
+```bash
+export FINNHUB_API_KEY="Finnhub_API_Key"
+```
+
+`FINNHUB_API_KEY`가 있으면 뉴대리가 티커별 최신 뉴스를 조회한다. 없으면 팀 대화는 동작하지만, 뉴대리는 최신 뉴스 API 미연결 상태를 명시한다.
 
 ## 변경 이력
 | 날짜 | 변경 내용 | 대상 | 사유 |
