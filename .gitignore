@@ -4,3 +4,6 @@ node_modules/
 _workspace/
 *.log
 .DS_Store
+.vercel
+.env*.local
+.claude/settings.local.json
