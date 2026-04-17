@@ -334,7 +334,7 @@ Emily 최종 정리
 - 지금은 어떤 구간인지
 - 다음 체크포인트 3개
 - 정보 제공 고지`,
-    2200
+    1300
   );
 }
 
@@ -377,7 +377,7 @@ async function fetchCompanyNews(ticker) {
     }
 
     const data = await response.json();
-    return Array.isArray(data) ? data.slice(0, 6) : [];
+    return Array.isArray(data) ? data.slice(0, 4) : [];
   } catch (error) {
     console.warn("Finnhub company-news error:", error);
     return [];
