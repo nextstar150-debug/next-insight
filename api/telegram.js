@@ -141,7 +141,18 @@ function routeMessage(text, state) {
     return { agent: "ki", intent: "memory", ticker };
   }
 
-  if (normalized.startsWith("/team") || text.includes("팀회의") || text.includes("깊게") || text.includes("딥")) {
+  if (
+    normalized.startsWith("/team") ||
+    text.includes("팀회의") ||
+    text.includes("팀 전체") ||
+    text.includes("전체 의견") ||
+    text.includes("팀 의견") ||
+    text.includes("리서치팀") ||
+    text.includes("종합 의견") ||
+    text.includes("종합해서") ||
+    text.includes("깊게") ||
+    text.includes("딥")
+  ) {
     return { agent: "team", intent: "team-review", ticker };
   }
 
@@ -173,7 +184,7 @@ function extractTicker(text) {
 
 async function runRoute(route, userText, state) {
   if (!route.ticker && route.agent !== "emily") {
-    return "에밀리예요. 어떤 종목에 대해 볼까요? 예: `뉴대리 IREN 최신 뉴스`, `반과장 RKLB 의견은?`, `기대리 IONQ 기억 보여줘`";
+    return "에밀리예요. 어떤 종목에 대해 볼까요? 예: `에밀리 IREN 팀 전체 의견 줘`, `뉴대리 IREN 최신 뉴스`, `반과장 RKLB 의견은?`, `기대리 IONQ 기억 보여줘`";
   }
 
   if (route.agent === "nu") {
@@ -268,7 +279,7 @@ ${memory}
 
 async function runTeamReview(ticker, userText) {
   if (!ticker) {
-    return "에밀리예요. 팀회의를 열려면 종목이나 테마를 알려주세요. 예: `팀회의 IREN`, `/team RKLB`, `양자컴퓨팅 깊게 봐줘`";
+    return "에밀리예요. 팀 전체 의견을 내려면 종목이나 테마를 알려주세요. 예: `에밀리 IREN 팀 전체 의견 줘`, `/team RKLB`, `양자컴퓨팅 깊게 봐줘`";
   }
 
   const [memory, newsReply] = await Promise.all([
@@ -292,14 +303,34 @@ ${memory}
 반과장 의견:
 ${riskReply}
 
-Emily가 최종 팀회의 메모로 정리하세요.
+Emily가 최종 팀 전체 의견으로 정리하세요.
+
+중요:
+- 뉴대리, 기대리, 반과장의 의견을 그대로 길게 복붙하지 말고 Emily가 압축/충돌 조정/우선순위화를 하세요.
+- Telegram에서 읽기 좋게 1200-1800자 정도로 답하세요.
+- 최신 뉴스가 의견성 글이면 "의견성/분석글"로 표시하고 확정 사실처럼 말하지 마세요.
+- 사용자가 후속으로 "반과장 더 자세히"처럼 물을 수 있도록 마지막에 다음 호출 힌트를 짧게 주세요.
+
 형식:
 Emily's View
-뉴대리 브리핑
-기대리 메모
-반과장 리스크
-Next Checkpoints
-정보 제공 고지`,
+한 줄 결론.
+
+뉴대리 | 최신 이벤트
+- 핵심 뉴스/이벤트 2-3개
+- Thesis 영향: 강화/중립/약화
+
+기대리 | 기존 기억
+- 기존 thesis
+- 지난 watchpoint와 이번 확인점
+
+반과장 | 반대 논리
+- 가장 중요한 리스크 2-3개
+- 리스크 완화 조건
+
+Emily 최종 정리
+- 지금은 어떤 구간인지
+- 다음 체크포인트 3개
+- 정보 제공 고지`,
     2200
   );
 }
@@ -418,6 +449,8 @@ function helpMessage() {
 - 뉴대리 RKLB 최신 뉴스 있어?
 - 반과장 IREN 의견은?
 - 기대리 RKLB 지난번 thesis 뭐였지?
+- 에밀리 IREN 팀 전체 의견 줘
+- RKLB 리서치팀 종합 의견은?
 - 팀회의 IREN
 
 명령어:
