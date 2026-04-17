@@ -284,29 +284,32 @@ async function runTeamReview(ticker, userText) {
 
   const [memory, newsReply] = await Promise.all([
     loadTickerMemory(ticker),
-    runNewsAgent(ticker, `팀회의용 최신 이벤트 확인: ${userText}`),
+    getNewsContextForTeam(ticker),
   ]);
-  const riskReply = await runRiskAgent(ticker, userText, memory, newsReply);
 
   return callClaude(
-    EMILY_SYSTEM_PROMPT,
+    `${EMILY_SYSTEM_PROMPT}
+
+팀 전체 의견을 낼 때는 한 번의 응답 안에서 네 팀원의 목소리를 분리해 보여주세요.
+- 에밀리: 최종 관점과 조율
+- 뉴대리: 아래 뉴스 데이터만 근거로 최신 이벤트 해석
+- 기대리: 아래 memory만 근거로 기존 thesis와 watchpoint 확인
+- 반과장: 반대 논리와 리스크 제시`,
     `Heekyung이 팀회의를 요청했습니다.
 종목/테마: ${ticker}
 사용자 요청: ${userText}
 
-뉴대리 브리핑:
+뉴대리용 최신 뉴스 데이터:
 ${newsReply}
 
-기대리 메모:
+기대리용 종목 메모:
 ${memory}
-
-반과장 의견:
-${riskReply}
 
 Emily가 최종 팀 전체 의견으로 정리하세요.
 
 중요:
-- 뉴대리, 기대리, 반과장의 의견을 그대로 길게 복붙하지 말고 Emily가 압축/충돌 조정/우선순위화를 하세요.
+- 실제 하위 에이전트를 따로 호출하지 않았지만, 각 팀원의 관점을 분리해 작성하세요.
+- 뉴스 데이터에 없는 내용을 최신 사실처럼 말하지 마세요.
 - Telegram에서 읽기 좋게 1200-1800자 정도로 답하세요.
 - 최신 뉴스가 의견성 글이면 "의견성/분석글"로 표시하고 확정 사실처럼 말하지 마세요.
 - 사용자가 후속으로 "반과장 더 자세히"처럼 물을 수 있도록 마지막에 다음 호출 힌트를 짧게 주세요.
@@ -333,6 +336,21 @@ Emily 최종 정리
 - 정보 제공 고지`,
     2200
   );
+}
+
+async function getNewsContextForTeam(ticker) {
+  if (!ticker || ticker === "QUANTUM") {
+    return "티커 뉴스 API 조회 대상이 아닙니다. 테마성 질문이므로 최신 뉴스는 별도 확인이 필요합니다.";
+  }
+
+  const news = await fetchCompanyNews(ticker);
+  const apiStatus = process.env.FINNHUB_API_KEY
+    ? "FINNHUB_API_KEY로 최근 7일 company-news를 조회했습니다."
+    : "FINNHUB_API_KEY가 없어 최신 뉴스 API 조회를 하지 못했습니다.";
+
+  return `${apiStatus}
+
+${formatNewsContext(news)}`;
 }
 
 async function fetchCompanyNews(ticker) {
