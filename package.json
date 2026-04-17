@@ -1,0 +1,9 @@
+{
+  "name": "next-insight",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Emily - 미국주식 리서치 AI 어시스턴트",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0"
+  }
+}
