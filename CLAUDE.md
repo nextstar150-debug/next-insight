@@ -37,9 +37,17 @@ export ANTHROPIC_API_KEY="Anthropic_API_Key"
 ## 환경변수 (선택 설정)
 ```bash
 export FINNHUB_API_KEY="Finnhub_API_Key"
+export UPSTASH_REDIS_REST_URL="Upstash_REST_URL"
+export UPSTASH_REDIS_REST_TOKEN="Upstash_REST_TOKEN"
+export SUPABASE_URL="Supabase_Project_URL"
+export SUPABASE_SERVICE_ROLE_KEY="Supabase_Service_Role_Key"
 ```
 
 `FINNHUB_API_KEY`가 있으면 뉴대리가 티커별 최신 뉴스를 조회한다. 없으면 팀 대화는 동작하지만, 뉴대리는 최신 뉴스 API 미연결 상태를 명시한다.
+
+`UPSTASH_REDIS_REST_URL`과 `UPSTASH_REDIS_REST_TOKEN`이 있으면 Telegram 대화의 최근 맥락을 14일 동안 저장한다. 없으면 Vercel 함수 인스턴스 메모리로 fallback한다.
+
+`SUPABASE_URL`과 `SUPABASE_SERVICE_ROLE_KEY`가 있으면 기대리가 Supabase 장기 메모리를 우선 읽고, "기억해줘/기록해줘/저장해줘" 요청을 `memory_events`에 저장한다. 없으면 `_memory/*.md` 파일로 fallback한다.
 
 ## 변경 이력
 | 날짜 | 변경 내용 | 대상 | 사유 |

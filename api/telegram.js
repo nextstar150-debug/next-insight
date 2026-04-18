@@ -9,8 +9,11 @@ const client = new Anthropic({
 const MODEL = "claude-opus-4-7";
 const WATCHLIST = ["IREN", "RKLB", "IONQ", "RGTI", "QBTS", "QUBT", "NVDA", "PLTR", "TSLA"];
 const conversationState = new Map();
+const conversationMessages = new Map();
+const HISTORY_LIMIT = 8;
+const STATE_TTL_SECONDS = 60 * 60 * 24 * 14;
 
-const TEAM_INTRO = `Next-Insight v0.2: Emily Team Chat
+const TEAM_INTRO = `Next-Insight v0.3: Persistent Emily Team Chat
 
 팀 구성:
 - 에밀리: 디렉터. 최종 판단과 팀 조율.
@@ -101,19 +104,37 @@ export default async function handler(req, res) {
 
     await sendTyping(chatId);
 
-    const state = getState(chatId);
+    const state = await getState(chatId);
+    const recentMessages = await getRecentMessages(chatId);
     const route = routeMessage(userText, state);
-    updateState(chatId, {
+    await updateState(chatId, {
       lastTicker: route.ticker || state.lastTicker,
       lastAgent: route.agent,
       lastIntent: route.intent,
     });
 
-    const reply = await runRoute(route, userText, getState(chatId));
+    await appendMessage(chatId, {
+      role: "user",
+      agent: route.agent,
+      ticker: route.ticker,
+      text: userText,
+    });
+
+    const reply = await runRoute(route, userText, {
+      ...(await getState(chatId)),
+      recentMessages,
+    });
     if (route.agent === "nu") {
-      updateState(chatId, { lastNewsBrief: reply });
+      await updateState(chatId, { lastNewsBrief: reply });
     }
-    await sendMessage(chatId, reply);
+    const finalReply = addDirectorGreeting(route, userText, reply);
+    await appendMessage(chatId, {
+      role: "assistant",
+      agent: route.agent,
+      ticker: route.ticker,
+      text: finalReply,
+    });
+    await sendMessage(chatId, finalReply);
   } catch (error) {
     console.error("Next-Insight handler error:", error);
     await sendMessage(
@@ -128,6 +149,10 @@ export default async function handler(req, res) {
 function routeMessage(text, state) {
   const normalized = text.toLowerCase();
   const ticker = extractTicker(text) || state.lastTicker || null;
+
+  if (text.includes("기억해줘") || text.includes("기록해줘") || text.includes("저장해줘")) {
+    return { agent: "ki", intent: "remember", ticker };
+  }
 
   if (normalized.startsWith("/news") || text.includes("뉴대리") || text.includes("뉴스") || text.includes("최신")) {
     return { agent: "nu", intent: "news", ticker };
@@ -198,6 +223,9 @@ async function runRoute(route, userText, state) {
 
   if (route.agent === "ki") {
     const memory = await loadTickerMemory(route.ticker);
+    if (route.intent === "remember") {
+      return rememberForTicker(route.ticker, userText, memory);
+    }
     return runMemoryAgent(route.ticker, userText, memory);
   }
 
@@ -212,10 +240,14 @@ async function runEmily(ticker, userText, state) {
   const context = ticker
     ? `현재 대화 종목: ${ticker}\n직전 호출 팀원: ${state.lastAgent || "없음"}\n직전 의도: ${state.lastIntent || "없음"}`
     : "현재 대화 종목 없음";
+  const recentContext = formatRecentMessages(state.recentMessages);
 
   return callClaude(
     EMILY_SYSTEM_PROMPT,
     `${context}
+
+최근 대화:
+${recentContext}
 
 사용자 메시지:
 ${userText}
@@ -234,7 +266,10 @@ async function runNewsAgent(ticker, userText) {
 
   return callClaude(
     NU_SYSTEM_PROMPT,
-    `담당 종목/테마: ${ticker || "미지정"}
+    `최근 대화:
+${formatRecentMessages([])}
+
+담당 종목/테마: ${ticker || "미지정"}
 사용자 요청: ${userText}
 API 상태: ${apiStatus}
 
@@ -274,6 +309,30 @@ ${memory}
 
 기대리로 답하세요. 기존 thesis, watchpoint, 리스크, 다음 기록할 항목을 나누어 말하세요.`,
     1400
+  );
+}
+
+async function rememberForTicker(ticker, userText, memory) {
+  const saved = await saveMemoryEvent({
+    ticker,
+    eventType: "user_note",
+    title: summarizeMemoryTitle(userText),
+    body: userText,
+    agent: "기대리",
+    importance: "medium",
+  });
+
+  return callClaude(
+    KI_SYSTEM_PROMPT,
+    `담당 종목/테마: ${ticker}
+사용자 요청: ${userText}
+장기 메모리 저장 상태: ${saved ? "Supabase memory_events에 저장됨" : "Supabase 미연결 또는 저장 실패. 대화 중에는 반영하지만 장기 저장은 되지 않음"}
+
+기존 memory:
+${memory}
+
+기대리로 답하세요. 저장했다면 어떤 항목으로 기억했는지 짧게 확인하고, 다음에 확인할 체크포인트를 2개만 제안하세요.`,
+    900
   );
 }
 
@@ -406,6 +465,11 @@ async function loadTickerMemory(ticker) {
 
   const fileName = `${ticker.toUpperCase()}.md`;
   const filePath = path.join(process.cwd(), "_memory", fileName);
+  const supabaseMemory = await loadSupabaseTickerMemory(ticker);
+
+  if (supabaseMemory) {
+    return supabaseMemory;
+  }
 
   try {
     return await readFile(filePath, "utf8");
@@ -437,16 +501,261 @@ async function callClaude(system, user, maxTokens) {
   return response.content[0]?.text || "응답을 만들지 못했어요.";
 }
 
-function getState(chatId) {
+async function getState(chatId) {
+  const key = stateKey(chatId);
+  const redisState = await redisCommand(["GET", key]);
+  if (redisState) {
+    try {
+      return JSON.parse(redisState);
+    } catch (error) {
+      console.warn("Failed to parse Redis state:", error);
+    }
+  }
+
   return conversationState.get(chatId) || {};
 }
 
-function updateState(chatId, nextState) {
-  conversationState.set(chatId, {
-    ...getState(chatId),
+async function updateState(chatId, nextState) {
+  const next = {
+    ...(await getState(chatId)),
     ...nextState,
     updatedAt: new Date().toISOString(),
+  };
+
+  conversationState.set(chatId, next);
+  await redisCommand(["SET", stateKey(chatId), JSON.stringify(next), "EX", STATE_TTL_SECONDS]);
+}
+
+async function appendMessage(chatId, message) {
+  const item = {
+    ...message,
+    createdAt: new Date().toISOString(),
+  };
+  const local = conversationMessages.get(chatId) || [];
+  conversationMessages.set(chatId, [...local, item].slice(-HISTORY_LIMIT));
+
+  const key = messagesKey(chatId);
+  await redisCommand(["RPUSH", key, JSON.stringify(item)]);
+  await redisCommand(["LTRIM", key, -HISTORY_LIMIT, -1]);
+  await redisCommand(["EXPIRE", key, STATE_TTL_SECONDS]);
+}
+
+async function getRecentMessages(chatId) {
+  const redisMessages = await redisCommand(["LRANGE", messagesKey(chatId), -HISTORY_LIMIT, -1]);
+  if (Array.isArray(redisMessages)) {
+    return redisMessages
+      .map((item) => {
+        try {
+          return JSON.parse(item);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+  }
+
+  return conversationMessages.get(chatId) || [];
+}
+
+async function redisCommand(command) {
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+
+  if (!url || !token) {
+    return null;
+  }
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(command),
+      signal: AbortSignal.timeout(5000),
+    });
+
+    if (!response.ok) {
+      console.warn("Upstash Redis command failed:", response.status, await response.text());
+      return null;
+    }
+
+    const payload = await response.json();
+    return payload.result ?? null;
+  } catch (error) {
+    console.warn("Upstash Redis command error:", error);
+    return null;
+  }
+}
+
+async function loadSupabaseTickerMemory(ticker) {
+  if (!hasSupabaseConfig()) {
+    return null;
+  }
+
+  try {
+    const normalizedTicker = ticker.toUpperCase();
+    const [memoryResponse, eventsResponse] = await Promise.all([
+      supabaseRequest(
+        `/rest/v1/ticker_memories?ticker=eq.${encodeURIComponent(normalizedTicker)}&select=*`
+      ),
+      supabaseRequest(
+        `/rest/v1/memory_events?ticker=eq.${encodeURIComponent(normalizedTicker)}&select=event_type,title,body,agent,importance,created_at&order=created_at.desc&limit=8`
+      ),
+    ]);
+    const memory = Array.isArray(memoryResponse) ? memoryResponse[0] : null;
+    const events = Array.isArray(eventsResponse) ? eventsResponse : [];
+
+    if (!memory && !events.length) {
+      return null;
+    }
+
+    return formatSupabaseMemory(normalizedTicker, memory, events);
+  } catch (error) {
+    console.warn("Supabase memory load failed:", error);
+    return null;
+  }
+}
+
+async function saveMemoryEvent({ ticker, eventType, title, body, agent, importance }) {
+  if (!ticker || !hasSupabaseConfig()) {
+    return false;
+  }
+
+  try {
+    await supabaseRequest("/rest/v1/memory_events", {
+      method: "POST",
+      body: JSON.stringify({
+        ticker: ticker.toUpperCase(),
+        event_type: eventType,
+        title,
+        body,
+        agent,
+        importance,
+      }),
+      prefer: "return=minimal",
+    });
+    return true;
+  } catch (error) {
+    console.warn("Supabase memory save failed:", error);
+    return false;
+  }
+}
+
+async function supabaseRequest(pathname, options = {}) {
+  const baseUrl = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const response = await fetch(`${baseUrl}${pathname}`, {
+    method: options.method || "GET",
+    headers: {
+      apikey: key,
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
+      ...(options.prefer ? { Prefer: options.prefer } : {}),
+    },
+    body: options.body,
+    signal: AbortSignal.timeout(8000),
   });
+
+  if (!response.ok) {
+    throw new Error(`Supabase request failed: ${response.status} ${await response.text()}`);
+  }
+
+  if (response.status === 204 || options.prefer === "return=minimal") {
+    return null;
+  }
+
+  return response.json();
+}
+
+function hasSupabaseConfig() {
+  return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+}
+
+function formatSupabaseMemory(ticker, memory, events) {
+  const eventLines = events.length
+    ? events
+        .map(
+          (event) =>
+            `- [${event.created_at?.slice(0, 10) || "날짜 없음"} | ${event.agent || "agent"} | ${event.importance || "medium"}] ${event.title}: ${event.body || ""}`
+        )
+        .join("\n")
+    : "최근 memory event 없음";
+
+  return `# ${ticker}
+
+## Current Thesis
+${memory?.current_thesis || "저장된 current thesis 없음"}
+
+## Management Trust
+${memory?.management_trust || "저장된 management trust 메모 없음"}
+
+## Key Risks
+${memory?.key_risks || "저장된 key risks 없음"}
+
+## Watchpoints
+${memory?.watchpoints || "저장된 watchpoints 없음"}
+
+## Last Emily View
+${memory?.last_emily_view || "저장된 last Emily view 없음"}
+
+## Recent Memory Events
+${eventLines}`;
+}
+
+function formatRecentMessages(messages = []) {
+  if (!messages.length) {
+    return "최근 대화 없음";
+  }
+
+  return messages
+    .slice(-HISTORY_LIMIT)
+    .map((message) => {
+      const speaker = message.role === "user" ? "Heekyung" : agentLabel(message.agent);
+      const ticker = message.ticker ? `/${message.ticker}` : "";
+      const text = message.text?.length > 600 ? `${message.text.slice(0, 600)}...` : message.text;
+      return `- ${speaker}${ticker}: ${text}`;
+    })
+    .join("\n");
+}
+
+function addDirectorGreeting(route, userText, reply) {
+  if (!isAgentCalledByName(userText)) {
+    return reply;
+  }
+
+  if (reply.startsWith("네 이사님^^")) {
+    return reply;
+  }
+
+  return `네 이사님^^\n${reply}`;
+}
+
+function isAgentCalledByName(text) {
+  return ["에밀리", "뉴대리", "반과장", "기대리"].some((name) => text.includes(name));
+}
+
+function agentLabel(agent) {
+  return {
+    emily: "에밀리",
+    nu: "뉴대리",
+    ban: "반과장",
+    ki: "기대리",
+    team: "에밀리",
+  }[agent] || "Next-Insight";
+}
+
+function stateKey(chatId) {
+  return `conv:${chatId}:state`;
+}
+
+function messagesKey(chatId) {
+  return `conv:${chatId}:messages`;
+}
+
+function summarizeMemoryTitle(text) {
+  return text.replace(/기억해줘|기록해줘|저장해줘/g, "").trim().slice(0, 80) || "사용자 메모";
 }
 
 function formatDate(date) {
